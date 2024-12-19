@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <title>書籍情報検索</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js"></script>
+    <style>
+      #qr-reader {
+        width: 500px;
+        height: 400px;
+        border: 1px solid black;
+      }
+      #camera-select {
+        margin-bottom: 10px;
+      }
+      #result {
+        font-size: 1.2em;
+        margin-top: 10px;
+      }
+    </style>
+    <script>
+      let quaggaConfig = {
+        inputStream: {
+          name: "Live",
+          type: "LiveStream",
+          target: "#qr-reader",
+          constraints: {
+            facingMode: "environment"
+          }
+        },
+        decoder: {
+          readers: ["ean_reader", "ean_8_reader", "code_128_reader"]
+        }
+      };
+      // ISBN-13のチェックサムを確認する関数
+      function isValidISBN(isbn) {
+        if (isbn.length !== 13 || !/^\d+$/.test(isbn)) {
+          return false;
+        }
+        let sum = 0;
+        for (let i = 0; i < 12; i++) {
+          const digit = parseInt(isbn[i]);
+          sum += (i % 2 === 0) ? digit : digit * 3;
+        }
+        const checkDigit = (10 - (sum % 10)) % 10;
+        return checkDigit === parseInt(isbn[12]);
+      }
+      async function fetchBookInfo(isbn) {
+        const url = `https://ndlsearch.ndl.go.jp/api/opensearch?isbn=${isbn}`;
+        try {
+          const response = await fetch(url);
+          const xmlText = await response.text();
+          const parser = new DOMParser();
+          const xmlDoc = parser.parseFromString(xmlText, "application/xml");
+          // 書籍情報の取得
+          const title = xmlDoc.getElementsByTagName("title")[1]?.textContent || 'N/A';
+          let authorNodes = xmlDoc.getElementsByTagName("author");
+          let authors = Array.from(authorNodes)
+                            .map(author => author.textContent.trim().replace(/, /g, ''))
+                            .filter((value, index, self) => self.indexOf(value) === index);
+          if (authors.length > 0) {
+            authors = [...new Set(authors)].join(' ') + ' 著';
+          } else {
+            authors = 'N/A';
+          }
+          let pageCount = xmlDoc.getElementsByTagName("dc:extent")[0]?.textContent || 'N/A';
+          pageCount = pageCount.replace(' p', '');  // ' p'を削除
+          // 結果を表示
+          document.getElementById('title').innerText = `題名: ${title}`;
+          document.getElementById('authors').innerText = `著者: ${authors}`;
+          document.getElementById('pageCount').innerText = `ページ数: ${pageCount}`;
+          // すべての情報がN/Aではない場合にGETリクエストを送信
+          if (title !== 'N/A' && authors !== 'N/A' && pageCount !== 'N/A') {
+            const apiUrl = '';
+            const params = new URLSearchParams({
+              ID: '記録',
+              題名: title,
+              作者: authors,
+              ページ数: pageCount
+            });
+            fetch(`${apiUrl}?${params.toString()}`, {
+              method: 'GET'
+            }).then(response => response.json())
+              .then(data => console.log('成功:', data))
+              .catch(error => console.error('エラー:', error));
+          }
+        } catch (error) {
+          console.error('書籍情報の取得中にエラーが発生しました:', error);
+        }
+      }
+      function startBarcodeScanner() {
+        Quagga.init(quaggaConfig, function(err) {
+          if (err) {
+            console.error('Quagga初期化エラー:', err);
+            return;
+          }
+          console.log("Quagga初期化完了");
+          Quagga.start();
+        });
+        Quagga.onDetected(function(result) {
+          const isbn = result.codeResult.code;
+          document.getElementById('result').innerText = `スキャン結果: ${isbn}`;
+          if (isValidISBN(isbn)) {
+            Quagga.stop();
+            fetchBookInfo(isbn);
+          } else {
+            alert('無効なISBNコードです。');
+          }
+        });
+      }
+      function stopBarcodeScanner() {
+        Quagga.stop();
+      }
+      function setCamera(cameraId) {
+        stopBarcodeScanner();
+        quaggaConfig.inputStream.constraints.deviceId = { exact: cameraId };
+        startBarcodeScanner();
+      }
+      document.addEventListener('DOMContentLoaded', () => {
+        navigator.mediaDevices.enumerateDevices().then(devices => {
+          const videoDevices = devices.filter(device => device.kind === 'videoinput');
+          const cameraSelect = document.getElementById('camera-select');
+          videoDevices.forEach(device => {
+            const option = document.createElement('option');
+            option.value = device.deviceId;
+            option.textContent = device.label || `Camera ${device.deviceId}`;
+            cameraSelect.appendChild(option);
+          });
+          cameraSelect.onchange = event => setCamera(event.target.value);
+          if (videoDevices.length > 0) {
+            setCamera(videoDevices[0].deviceId);
+          }
+        }).catch(err => {
+          console.error('カメラの取得中にエラーが発生しました:', err);
+        });
+      });
+    </script>
+  </head>
+  <body>
+    <h1>書籍情報検索</h1>
+    <label for="isbn">ISBNコードを入力してください:</label>
+    <input type="text" id="isbn" name="isbn">
+    <button type="button" onclick="fetchBookInfo(document.getElementById('isbn').value)">検索</button>
+    
+    <div>
+      <label for="camera-select">カメラを選択:</label>
+      <select id="camera-select"></select>
+    </div>
+    
+    <div id="qr-reader"></div>
+    <p id="result"></p>
+    <button type="button" onclick="startBarcodeScanner()">読み取り開始</button>
+    <button type="button" onclick="stopBarcodeScanner()">読み取り停止</button>
+    <h2>結果:</h2>
+    <p id="title"></p>
+    <p id="authors"></p>
+    <p id="pageCount"></p>
+  </body>
+</html>
